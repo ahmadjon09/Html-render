@@ -1,4 +1,3 @@
-// app.js
 import 'dotenv/config'
 import fs from 'fs'
 import path from 'path'
@@ -6,14 +5,14 @@ import express from 'express'
 import { Telegraf, Markup } from 'telegraf'
 
 /**
- *  — HTML Host Bot (to'liq, logs + confirm delete + owner metadata + update support + keepAlive)
+ *  — HTML Host Bot (logs + confirm delete + owner metadata + update support + keepAlive)
  *  .env required:
  *    BOT_TOKEN=...
  *    BASE_URL=http://yourdomain.com   (default http://localhost:3000)
  *    PORT=3000
  *
- *  Foydalanish:
- *    npm i telegraf express node-cron
+ *  Usage:
+ *    npm i telegraf express
  *    node app.js
  */
 
@@ -23,12 +22,12 @@ const {
   BASE_URL = 'http://localhost:3000',
   PORT = 3000
 } = process.env
-if (!BOT_TOKEN) throw new Error('BOT_TOKEN kerak!')
+if (!BOT_TOKEN) throw new Error('BOT_TOKEN required!')
 
 // Paths
 const ROOT = process.cwd()
 const SITES_DIR = path.join(ROOT, 'sites')
-const META_FILE = path.join(SITES_DIR, 'sites.json') // metadata (owner, createdAt, updatedAt)
+const META_FILE = path.join(SITES_DIR, 'sites.json')
 const LOG_FILE = path.join(SITES_DIR, 'logs.txt')
 
 fs.mkdirSync(SITES_DIR, { recursive: true })
@@ -102,107 +101,68 @@ const getUserSites = userId => {
   return Object.values(SITES_META).filter(s => s.owner === userId)
 }
 
+const generateQR = async (url, userId) => {
+  try {
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
+      url
+    )}`
+    return qrUrl
+  } catch (err) {
+    console.error('QR generation error:', err)
+    return null
+  }
+}
+
 // Telegraf & Express
 const app = express()
 const bot = new Telegraf(BOT_TOKEN)
 
 // In-memory maps to track "waiting for upload" states per user
-// pendingUpload[userId] = { type: 'create' }  -- waiting for new file
-// pendingUpload[userId] = { type: 'update', id } -- waiting to replace existing
 const pendingUpload = new Map()
+const pendingAction = new Map()
 
-// Localization (tuzatilgan versiya)
 const L = {
-  uz: {
-    welcome: `🏠 <b>HTML Host Botga xush kelibsiz!</b>\n\nHTML fayl yuboring → darhol hosting qilamiz`,
-    choose_lang: '🌐 <b>Tilni tanlang:</b>',
-    file_only_html: '❌ Faqat .html fayl yuboring!',
-    file_received: '📥 <b>Fayl qabul qilindi!</b>\n\nYaratilmoqda...',
-    upload_new: '📤 Yangi HTML fayl yuboring',
-    my_sites: '📁 Sizning saytlaringiz',
-    no_sites: '📭 Hozircha saytlar mavjud emas.\n\nHTML fayl yuboring!',
-    delete: '🗑 Oʻchirish',
-    view: '👀 Koʻrish',
-    new_upload: '🆕 Yangi yuklash',
-    back: '🔙 Orqaga',
-    help: `ℹ️ <b>Yordam</b>\n\n• HTML fayl yuboring → hosting\n• Yangi fayl = yangilash\n• Oʻchirish = tugma orqali\n\n/my — saytlar roʻyxati`,
-    error: '❌ Faylni saqlashda xato',
-    success: '✅ <b>Muvaffaqiyatli yaratildi!</b>',
-    updated: '🔄 <b>Yangilandi!</b>',
-    deleted: '🗑 <b>Oʻchirildi!</b>',
-    confirm_delete: '⚠️ Ushbu saytni oʻchirmoqchimisiz?',
-    update_prompt: '🔄 Yangilash',
-    not_your_site: '❌ Bu sayt sizga tegishli emas',
-    site_not_found: '❌ Sayt topilmadi',
-    cancel: '❌ Bekor qilish',
-    cancelled: '❎ Bekor qilindi'
-  },
-  en: {
-    welcome: `🏠 <b>Welcome to HTML Host Bot!</b>\n\nSend HTML file → instant hosting`,
-    choose_lang: '🌐 <b>Choose language:</b>',
-    file_only_html: '❌ Only .html files!',
-    file_received: '📥 <b>File received!</b>\n\nCreating...',
-    upload_new: '📤 Send new HTML file',
-    my_sites: '📁 Your sites',
-    no_sites: '📭 No sites yet.\n\nSend HTML file!',
-    delete: '🗑 Delete',
-    view: '👀 View',
-    new_upload: '🆕 Upload new',
-    back: '🔙 Back',
-    help: `ℹ️ <b>Help</b>\n\n• Send HTML file → hosting\n• New file = update\n• Delete = via button\n\n/my — sites list`,
-    error: '❌ Error saving file',
-    success: '✅ <b>Successfully created!</b>',
-    updated: '🔄 <b>Updated!</b>',
-    deleted: '🗑 <b>Deleted!</b>',
-    confirm_delete: '⚠️ Are you sure you want to delete this site?',
-    update_prompt: '🔄 Update',
-    not_your_site: '❌ This site does not belong to you',
-    site_not_found: '❌ Site not found',
-    cancel: '❌ Cancel',
-    cancelled: '❎ Cancelled'
-  },
-  ru: {
-    welcome: `🏠 <b>Добро пожаловать в HTML Host Bot!</b>\n\nОтправьте HTML файл → мгновенный хостинг`,
-    choose_lang: '🌐 <b>Выберите язык:</b>',
-    file_only_html: '❌ Только .html файлы!',
-    file_received: '📥 <b>Файл получен!</b>\n\nСоздаем...',
-    upload_new: '📤 Отправить новый HTML файл',
-    my_sites: '📁 Ваши сайты',
-    no_sites: '📭 Сайтов пока нет.\n\nОтправьте HTML файл!',
-    delete: '🗑 Удалить',
-    view: '👀 Посмотреть',
-    new_upload: '🆕 Загрузить новый',
-    back: '🔙 Назад',
-    help: `ℹ️ <b>Помощь</b>\n\n• Отправьте HTML файл → хостинг\n• Новый файл = обновление\n• Удалить = через кнопку\n\n/my — список сайтов`,
-    error: '❌ Ошибка сохранения файла',
-    success: '✅ <b>Успешно создано!</b>',
-    updated: '🔄 <b>Обновлено!</b>',
-    deleted: '🗑 <b>Удалено!</b>',
-    confirm_delete: '⚠️ Вы уверены, что хотите удалить этот сайт?',
-    update_prompt: '🔄 Обновить',
-    not_your_site: '❌ Этот сайт вам не принадлежит',
-    site_not_found: '❌ Сайт не найден',
-    cancel: '❌ Отмена',
-    cancelled: '❎ Отменено'
-  }
+  welcome: `🏠 <b>Welcome to HTML Host Bot!</b>\n\nSend HTML file → instant hosting`,
+  file_only_html: '❌ Only .html files!',
+  file_received: '📥 <b>File received!</b>\n\nCreating...',
+  upload_new: '📤 Send new HTML file',
+  my_sites: '📁 Your sites',
+  no_sites: '📭 No sites yet.\n\nSend HTML file!',
+  delete: '🗑 Delete',
+  view: '👀 View',
+  new_upload: '🆕 Upload new',
+  back: '🔙 Back',
+  help: `ℹ️ <b>HTML Host Bot Help</b>\n\n📤 <b>Upload HTML:</b>\n• Click "Upload new" or send .html file\n• File must contain valid HTML\n\n📁 <b>Manage Sites:</b>\n• Use /my command to list your sites\n• View, update, or delete existing sites\n• Get QR codes for easy sharing\n\n🔄 <b>Update Sites:</b>\n• Click "Update" on any site\n• Send new HTML file to replace content\n\n🗑 <b>Delete Sites:</b>\n• Confirmation required before deletion\n• Cannot be undone\n\n📊 <b>Limits:</b>\n• File size: Up to 20MB (Telegram limit)\n• File type: HTML only\n• No database storage - pure file hosting\n\n🔗 <b>Features:</b>\n• Instant hosting\n• QR code generation\n• Update existing sites\n• Owner-based access control\n• Activity logging`,
+  error: '❌ Error saving file',
+  success: '✅ <b>Successfully created!</b>',
+  updated: '🔄 <b>Updated!</b>',
+  deleted: '🗑 <b>Deleted!</b>',
+  confirm_delete: '⚠️ Are you sure you want to delete this site?',
+  update_prompt: '🔄 Update',
+  not_your_site: '❌ This site does not belong to you',
+  site_not_found: '❌ Site not found',
+  cancel: '❌ Cancel',
+  cancelled: '❎ Cancelled',
+  qr_code: '📱 QR Code',
+  file_too_large: '❌ File too large (max 20MB)',
+  invalid_html:
+    '❌ Invalid HTML file - must contain &lt;html&gt; or &lt;!DOCTYPE&gt;',
+  upload_reminder: '❗ Click "Upload new" button or use /my command first.',
+  processing_error: '❌ Error processing file'
 }
 
-const LANG_NAMES = { uz: '🇺🇿 Oʻzbek', ru: '🇷🇺 Русский', en: '🇺🇸 English' }
-const userLang = new Map()
-const t = (userId, key) => {
-  const lang = userLang.get(userId) || 'en'
-  return L[lang][key] ?? key
-}
+const t = key => L[key] ?? key
 
-// Utility to send or edit messages
+// Utility to send or edit messages - FIXED to always edit existing message
 const editOrReply = async (ctx, text, keyboard = null) => {
-  const userId = ctx.from?.id || (ctx.chat && ctx.chat.id) || 'unknown'
   const options = {
     parse_mode: 'HTML',
     disable_web_page_preview: true
   }
   if (keyboard) options.reply_markup = keyboard.reply_markup
+
   try {
+    // Always try to edit the existing message if it's a callback query
     if (ctx.callbackQuery && ctx.callbackQuery.message) {
       await ctx.telegram.editMessageText(
         ctx.chat.id,
@@ -211,67 +171,52 @@ const editOrReply = async (ctx, text, keyboard = null) => {
         text,
         options
       )
+      return ctx.callbackQuery.message.message_id
     } else {
-      await ctx.reply(text, options)
+      // For new messages (like start command), send new message
+      const message = await ctx.reply(text, options)
+      return message.message_id
     }
   } catch (err) {
-    // fallback to reply if edit failed (message could be too old)
-    await ctx.reply(text, options)
+    console.error('Message edit error:', err)
+    // If edit fails (message too old), send new message
+    const message = await ctx.reply(text, options)
+    return message.message_id
   }
+}
+
+// Enhanced file validation
+const validateHTMLFile = (file, html) => {
+  // Check file size (Telegram limit is 20MB for documents)
+  if (file.file_size > 20 * 1024 * 1024) {
+    return { valid: false, error: t('file_too_large') }
+  }
+
+  // Check file extension
+  if (!file.file_name?.toLowerCase().endsWith('.html')) {
+    return { valid: false, error: t('file_only_html') }
+  }
+
+  // Check HTML content
+  if (!html.includes('<html') && !html.includes('<!DOCTYPE')) {
+    return { valid: false, error: t('invalid_html') }
+  }
+
+  return { valid: true }
 }
 
 /* ===== Bot handlers ===== */
 
 bot.start(async ctx => {
   const userId = ctx.from.id
-  const lang = userLang.get(userId)
-  log('INFO', userId, 'start', `lang=${lang || 'none'}`)
-  if (lang) {
-    return editOrReply(
-      ctx,
-      t(userId, 'welcome'),
-      Markup.inlineKeyboard([
-        [Markup.button.callback(t(userId, 'my_sites'), 'my_sites')],
-        [Markup.button.callback('🌐 Language', 'change_lang')]
-      ])
-    )
-  }
+  log('INFO', userId, 'start', '')
   await editOrReply(
     ctx,
-    t(userId, 'choose_lang'),
+    t('welcome'),
     Markup.inlineKeyboard([
-      [Markup.button.callback(LANG_NAMES.uz, 'lang_uz')],
-      [Markup.button.callback(LANG_NAMES.ru, 'lang_ru')],
-      [Markup.button.callback(LANG_NAMES.en, 'lang_en')]
-    ])
-  )
-})
-
-bot.action(/lang_(.+)/, async ctx => {
-  const lang = ctx.match[1]
-  const userId = ctx.from.id
-  userLang.set(userId, lang)
-  log('INFO', userId, 'lang_set', lang)
-  await ctx.answerCbQuery()
-  await editOrReply(
-    ctx,
-    t(userId, 'welcome'),
-    Markup.inlineKeyboard([
-      [Markup.button.callback(t(userId, 'my_sites'), 'my_sites')],
-      [Markup.button.callback('🌐 Language', 'change_lang')]
-    ])
-  )
-})
-
-bot.action('change_lang', async ctx => {
-  await ctx.answerCbQuery()
-  await editOrReply(
-    ctx,
-    t(ctx.from.id, 'choose_lang'),
-    Markup.inlineKeyboard([
-      [Markup.button.callback(LANG_NAMES.uz, 'lang_uz')],
-      [Markup.button.callback(LANG_NAMES.ru, 'lang_ru')],
-      [Markup.button.callback(LANG_NAMES.en, 'lang_en')]
+      [Markup.button.callback(t('my_sites'), 'my_sites')],
+      [Markup.button.callback('ℹ️ Help', 'help_btn')],
+      [Markup.button.callback(t('new_upload'), 'upload')]
     ])
   )
 })
@@ -284,18 +229,19 @@ async function showSites (ctx) {
   loadMeta()
   const sites = getUserSites(userId)
   log('INFO', userId, 'list_sites', `count=${sites.length}`)
+
   if (!sites.length) {
     return editOrReply(
       ctx,
-      t(userId, 'no_sites'),
+      t('no_sites'),
       Markup.inlineKeyboard([
-        [Markup.button.callback(t(userId, 'new_upload'), 'upload')],
-        [Markup.button.callback(t(userId, 'back'), 'back_start')]
+        [Markup.button.callback(t('new_upload'), 'upload')],
+        [Markup.button.callback(t('back'), 'back_start')]
       ])
     )
   }
 
-  let text = `<b>${t(userId, 'my_sites')}</b>\n\n`
+  let text = `<b>${t('my_sites')}</b>\n\n`
   const keyboard = []
   sites.forEach((site, index) => {
     const updated = new Date(site.updatedAt).toLocaleDateString()
@@ -303,29 +249,68 @@ async function showSites (ctx) {
       site.sizeKB
     } KB — <i>${updated}</i>\n`
     keyboard.push([
-      Markup.button.url(t(userId, 'view'), `${BASE_URL}/sites/${site.file}`),
-      Markup.button.callback(t(userId, 'delete'), `del_${site.id}`),
-      Markup.button.callback(t(userId, 'update_prompt'), `update_${site.id}`)
+      Markup.button.url(t('view'), `${BASE_URL}/sites/${site.file}`),
+      Markup.button.callback(t('qr_code'), `qr_${site.id}`),
+      Markup.button.callback(t('update_prompt'), `update_select_${site.id}`),
+      Markup.button.callback(t('delete'), `del_select_${site.id}`)
     ])
   })
 
   keyboard.push([
-    Markup.button.callback(t(userId, 'new_upload'), 'upload'),
-    Markup.button.callback(t(userId, 'back'), 'back_start')
+    Markup.button.callback(t('new_upload'), 'upload'),
+    Markup.button.callback('ℹ️ Help', 'help_btn'),
+    Markup.button.callback(t('back'), 'back_start')
   ])
 
   await editOrReply(ctx, text, Markup.inlineKeyboard(keyboard))
 }
 
+bot.action(/qr_(.+)/, async ctx => {
+  const id = ctx.match[1]
+  const userId = ctx.from.id
+  const meta = SITES_META[id]
+
+  if (!meta) {
+    await ctx.answerCbQuery(t('site_not_found'), { show_alert: true })
+    return
+  }
+  if (meta.owner !== userId) {
+    await ctx.answerCbQuery(t('not_your_site'), { show_alert: true })
+    return
+  }
+
+  const url = `${BASE_URL}/sites/${meta.file}`
+  const qrUrl = await generateQR(url, userId)
+
+  await ctx.answerCbQuery()
+
+  if (qrUrl) {
+    // For QR code, we send a new message since it's a photo
+    await ctx.replyWithPhoto(qrUrl, {
+      caption: `📱 <b>QR Code</b>\n\n<code>${id}</code>\n\n🔗 <a href="${url}">Open Site</a>`,
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback(t('back'), 'my_sites')]
+      ])
+    })
+  } else {
+    await editOrReply(
+      ctx,
+      t('error'),
+      Markup.inlineKeyboard([[Markup.button.callback(t('back'), 'my_sites')]])
+    )
+  }
+})
+
 bot.action('back_start', async ctx => {
   await ctx.answerCbQuery()
-  const userId = ctx.from.id
   await editOrReply(
     ctx,
-    t(userId, 'welcome'),
+    t('welcome'),
     Markup.inlineKeyboard([
-      [Markup.button.callback(t(userId, 'my_sites'), 'my_sites')],
-      [Markup.button.callback('🌐 Language', 'change_lang')]
+      [Markup.button.callback(t('my_sites'), 'my_sites')],
+      [Markup.button.callback('ℹ️ Help', 'help_btn')],
+      [Markup.button.callback(t('new_upload'), 'upload')]
     ])
   )
 })
@@ -338,40 +323,71 @@ bot.action('upload', async ctx => {
   log('INFO', userId, 'awaiting_upload', 'create')
   await editOrReply(
     ctx,
-    `<b>${t(userId, 'upload_new')}</b>\n\n<i>${t(
-      userId,
-      'file_only_html'
-    )}</i>`,
+    `<b>${t('upload_new')}</b>\n\n<i>${t('file_only_html')}</i>`,
     Markup.inlineKeyboard([
-      [Markup.button.callback(t(userId, 'back'), 'my_sites')]
+      [Markup.button.callback(t('back'), 'my_sites')],
+      [Markup.button.callback('ℹ️ Help', 'help_btn')]
     ])
   )
 })
 
-// Update (replace) prompt: set pending to update id
-bot.action(/update_(.+)/, async ctx => {
-  await ctx.answerCbQuery()
-  const userId = ctx.from.id
+bot.action(/del_select_(.+)/, async ctx => {
   const id = ctx.match[1]
+  const userId = ctx.from.id
   const meta = SITES_META[id]
+
   if (!meta) {
-    await editOrReply(ctx, t(userId, 'site_not_found'))
+    await ctx.answerCbQuery(t('site_not_found'), { show_alert: true })
     return
   }
   if (meta.owner !== userId) {
-    await editOrReply(ctx, t(userId, 'not_your_site'))
+    await ctx.answerCbQuery(t('not_your_site'), { show_alert: true })
     return
   }
-  pendingUpload.set(userId, { type: 'update', id })
-  log('INFO', userId, 'awaiting_upload', `update:${id}`)
+
+  pendingAction.set(userId, { type: 'delete', id })
+  await ctx.answerCbQuery()
+
   await editOrReply(
     ctx,
-    `<b>${t(userId, 'update_prompt')}: <code>${id}</code></b>\n\n<i>${t(
-      userId,
+    `${t(
+      'confirm_delete'
+    )}\n\n<code>${id}</code>\n\n📍 <b>URL:</b> ${BASE_URL}/sites/${meta.file}`,
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback('✅ Yes', `del_confirm_${id}`),
+        Markup.button.callback(t('cancel'), `del_cancel_${id}`)
+      ]
+    ])
+  )
+})
+
+bot.action(/update_select_(.+)/, async ctx => {
+  const id = ctx.match[1]
+  const userId = ctx.from.id
+  const meta = SITES_META[id]
+
+  if (!meta) {
+    await ctx.answerCbQuery(t('site_not_found'), { show_alert: true })
+    return
+  }
+  if (meta.owner !== userId) {
+    await ctx.answerCbQuery(t('not_your_site'), { show_alert: true })
+    return
+  }
+
+  pendingUpload.set(userId, { type: 'update', id })
+  pendingAction.set(userId, { type: 'update', id })
+  await ctx.answerCbQuery()
+
+  await editOrReply(
+    ctx,
+    `<b>${t('update_prompt')}: <code>${id}</code></b>\n\n<i>${t(
       'file_only_html'
     )}</i>`,
     Markup.inlineKeyboard([
-      [Markup.button.callback(t(userId, 'back'), 'my_sites')]
+      [Markup.button.callback(t('back'), 'my_sites')],
+      [Markup.button.callback('ℹ️ Help', 'help_btn')]
     ])
   )
 })
@@ -379,74 +395,53 @@ bot.action(/update_(.+)/, async ctx => {
 // Document handler (uploads)
 bot.on('document', async ctx => {
   const userId = ctx.from.id
-  if (!userLang.has(userId)) {
-    return ctx.reply(t(userId, 'choose_lang'), {
-      parse_mode: 'HTML',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('🌐 Tilni tanlash', 'change_lang')]
-      ])
-    })
-  }
 
   const pending = pendingUpload.get(userId)
   if (!pending) {
-    // if user didn't request upload, remind them
-    return ctx.reply(
-      `<b>❗ ${t(
-        userId,
-        'upload_new'
-      )} tugmasini bosing yoki /my buyrug'ini yuboring.</b>`,
-      {
-        parse_mode: 'HTML',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback(t(userId, 'new_upload'), 'upload')]
-        ])
-      }
+    // if user didn't request upload, remind them - edit current message
+    return editOrReply(
+      ctx,
+      `<b>${t('upload_reminder')}</b>`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback(t('new_upload'), 'upload')],
+        [Markup.button.callback('ℹ️ Help', 'help_btn')]
+      ])
     )
   }
 
   const file = ctx.message.document
-  if (!file.file_name?.endsWith('.html')) {
-    return ctx.reply(`<b>${t(userId, 'file_only_html')}</b>`, {
-      parse_mode: 'HTML',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback(t(userId, 'back'), 'my_sites')]
-      ])
-    })
-  }
 
-  const loadingMsg = await ctx.reply(`<b>${t(userId, 'file_received')}</b>`, {
-    parse_mode: 'HTML'
-  })
+  // Edit current message to show loading
+  await editOrReply(
+    ctx,
+    `<b>${t('file_received')}</b>`,
+    Markup.inlineKeyboard([]) // Remove buttons during processing
+  )
+
   try {
     const fileInfo = await ctx.telegram.getFile(file.file_id)
     const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${fileInfo.file_path}`
 
-    // fetch file (node 18+ has fetch); if not, user must polyfill
     const response = await fetch(fileUrl)
+    if (!response.ok) {
+      throw new Error(`Failed to download file: ${response.status}`)
+    }
+
     const html = await response.text()
 
-    if (!html.includes('<html') && !html.includes('<!DOCTYPE')) {
-      await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        loadingMsg.message_id,
-        undefined,
-        `<b>❌ ${t(userId, 'error')}:</b> Bu HTML fayl emas!\n\n${t(
-          userId,
-          'file_only_html'
-        )}`,
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback(t(userId, 'back'), 'my_sites')]
-          ])
-        }
+    // Validate file
+    const validation = validateHTMLFile(file, html)
+    if (!validation.valid) {
+      await editOrReply(
+        ctx,
+        `<b>${validation.error}</b>`,
+        Markup.inlineKeyboard([[Markup.button.callback(t('back'), 'my_sites')]])
       )
       log(
         'WARN',
         userId,
-        'upload_failed_not_html',
-        `fileName=${file.file_name}`
+        'upload_failed_validation',
+        `fileName=${file.file_name} reason=${validation.error}`
       )
       pendingUpload.delete(userId)
       return
@@ -459,52 +454,46 @@ bot.on('document', async ctx => {
       const size = (html.length / 1024).toFixed(2)
       addSiteMeta(id, userId, size)
       const url = `${BASE_URL}/sites/${id}.html`
-      const resultText =
-        `✅ <b>${t(userId, 'success')}</b>\n\n` +
-        `📝 <b>ID:</b> <code>${id}</code>\n` +
-        `📦 <b>Hajmi:</b> ${size} KB\n\n` +
-        `🔗 <a href="${url}"><b>${t(userId, 'view')}</b></a>`
+      const qrUrl = await generateQR(url, userId)
 
-      await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        loadingMsg.message_id,
-        undefined,
-        resultText,
-        {
+      const resultText =
+        `✅ <b>${t('success')}</b>\n\n` +
+        `📝 <b>ID:</b> <code>${id}</code>\n` +
+        `📦 <b>Size:</b> ${size} KB\n` +
+        `🔗 <b>URL:</b> <a href="${url}">${url}</a>`
+
+      const keyboard = [
+        [Markup.button.url(t('view'), url)],
+        [
+          Markup.button.callback(t('my_sites'), 'my_sites'),
+          Markup.button.callback(t('new_upload'), 'upload')
+        ]
+      ]
+
+      if (qrUrl) {
+        // For QR code, send new message with photo
+        await ctx.replyWithPhoto(qrUrl, {
+          caption: resultText,
           parse_mode: 'HTML',
-          disable_web_page_preview: true,
-          ...Markup.inlineKeyboard([
-            [Markup.button.url(t(userId, 'view'), url)],
-            [Markup.button.callback(t(userId, 'my_sites'), 'my_sites')],
-            [Markup.button.callback(t(userId, 'new_upload'), 'upload')]
-          ])
-        }
-      )
+          ...Markup.inlineKeyboard(keyboard)
+        })
+      } else {
+        await editOrReply(ctx, resultText, Markup.inlineKeyboard(keyboard))
+      }
+
       log('INFO', userId, 'create_site', `id=${id} sizeKB=${size}`)
       pendingUpload.delete(userId)
     } else if (pending.type === 'update') {
       const id = pending.id
       const meta = SITES_META[id]
       if (!meta) {
-        await ctx.telegram.editMessageText(
-          ctx.chat.id,
-          loadingMsg.message_id,
-          undefined,
-          t(userId, 'site_not_found'),
-          { parse_mode: 'HTML' }
-        )
+        await editOrReply(ctx, t('site_not_found'), Markup.inlineKeyboard([]))
         log('WARN', userId, 'update_failed_not_found', `id=${id}`)
         pendingUpload.delete(userId)
         return
       }
       if (meta.owner !== userId) {
-        await ctx.telegram.editMessageText(
-          ctx.chat.id,
-          loadingMsg.message_id,
-          undefined,
-          t(userId, 'not_your_site'),
-          { parse_mode: 'HTML' }
-        )
+        await editOrReply(ctx, t('not_your_site'), Markup.inlineKeyboard([]))
         log('WARN', userId, 'update_failed_not_owner', `id=${id}`)
         pendingUpload.delete(userId)
         return
@@ -515,70 +504,42 @@ bot.on('document', async ctx => {
       const size = (html.length / 1024).toFixed(2)
       updateSiteMeta(id, size)
       const url = `${BASE_URL}/sites/${id}.html`
+      const qrUrl = await generateQR(url, userId)
 
-      await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        loadingMsg.message_id,
-        undefined,
-        `🔄 <b>${t(userId, 'updated')}</b>\n\n` +
-          `🔗 <a href="${url}">${t(userId, 'view')}</a>`,
-        {
+      const resultText =
+        `🔄 <b>${t('updated')}</b>\n\n` +
+        `📝 <b>ID:</b> <code>${id}</code>\n` +
+        `📦 <b>New Size:</b> ${size} KB\n` +
+        `🔗 <b>URL:</b> <a href="${url}">${url}</a>`
+
+      const keyboard = [
+        [Markup.button.url(t('view'), url)],
+        [Markup.button.callback(t('my_sites'), 'my_sites')]
+      ]
+
+      if (qrUrl) {
+        await ctx.replyWithPhoto(qrUrl, {
+          caption: resultText,
           parse_mode: 'HTML',
-          disable_web_page_preview: true,
-          ...Markup.inlineKeyboard([
-            [Markup.button.url(t(userId, 'view'), url)],
-            [Markup.button.callback(t(userId, 'my_sites'), 'my_sites')]
-          ])
-        }
-      )
+          ...Markup.inlineKeyboard(keyboard)
+        })
+      } else {
+        await editOrReply(ctx, resultText, Markup.inlineKeyboard(keyboard))
+      }
+
       log('INFO', userId, 'update_site', `id=${id} sizeKB=${size}`)
       pendingUpload.delete(userId)
     }
   } catch (err) {
     console.error('File processing error:', err)
-    await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      loadingMsg.message_id,
-      undefined,
-      `<b>${t(userId, 'error')}</b>\n\n${err.message}`,
-      {
-        parse_mode: 'HTML',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback(t(userId, 'back'), 'my_sites')]
-        ])
-      }
+    await editOrReply(
+      ctx,
+      `<b>${t('processing_error')}</b>\n\n<code>${err.message}</code>`,
+      Markup.inlineKeyboard([[Markup.button.callback(t('back'), 'my_sites')]])
     )
     log('ERROR', userId, 'upload_error', err.message)
     pendingUpload.delete(userId)
   }
-})
-
-// Delete confirmation flow
-bot.action(/del_(.+)/, async ctx => {
-  const id = ctx.match[1]
-  const userId = ctx.from.id
-  const meta = SITES_META[id]
-  if (!meta) {
-    await ctx.answerCbQuery(t(userId, 'site_not_found'), { show_alert: true })
-    return
-  }
-  if (meta.owner !== userId) {
-    await ctx.answerCbQuery(t(userId, 'not_your_site'), { show_alert: true })
-    return
-  }
-
-  // show confirm keyboard
-  await ctx.answerCbQuery()
-  await editOrReply(
-    ctx,
-    `${t(userId, 'confirm_delete')}\n\nID: <code>${id}</code>`,
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback('✅ Ha', `del_confirm_${id}`),
-        Markup.button.callback(t(userId, 'cancel'), `del_cancel_${id}`)
-      ]
-    ])
-  )
 })
 
 // Confirm delete
@@ -587,11 +548,11 @@ bot.action(/del_confirm_(.+)/, async ctx => {
   const userId = ctx.from.id
   const meta = SITES_META[id]
   if (!meta) {
-    await ctx.answerCbQuery(t(userId, 'site_not_found'), { show_alert: true })
+    await ctx.answerCbQuery(t('site_not_found'), { show_alert: true })
     return
   }
   if (meta.owner !== userId) {
-    await ctx.answerCbQuery(t(userId, 'not_your_site'), { show_alert: true })
+    await ctx.answerCbQuery(t('not_your_site'), { show_alert: true })
     return
   }
 
@@ -599,21 +560,22 @@ bot.action(/del_confirm_(.+)/, async ctx => {
   try {
     if (fs.existsSync(file)) fs.unlinkSync(file)
     removeSiteMeta(id)
-    await ctx.answerCbQuery(t(userId, 'deleted'))
+    await ctx.answerCbQuery(t('deleted'))
     await editOrReply(
       ctx,
-      `🗑 <b>${t(userId, 'deleted')}</b>\n\nID: <code>${id}</code>`,
+      `🗑 <b>${t('deleted')}</b>\n\nID: <code>${id}</code>`,
       Markup.inlineKeyboard([
         [
-          Markup.button.callback(t(userId, 'my_sites'), 'my_sites'),
-          Markup.button.callback(t(userId, 'back'), 'back_start')
+          Markup.button.callback(t('my_sites'), 'my_sites'),
+          Markup.button.callback(t('back'), 'back_start')
         ]
       ])
     )
     log('INFO', userId, 'delete_site', `id=${id}`)
+    pendingAction.delete(userId)
   } catch (err) {
     console.error('Delete error', err)
-    await ctx.answerCbQuery(t(userId, 'error'), { show_alert: true })
+    await ctx.answerCbQuery(t('error'), { show_alert: true })
     log('ERROR', userId, 'delete_error', `${id} ${err.message}`)
   }
 })
@@ -624,35 +586,45 @@ bot.action(/del_cancel_(.+)/, async ctx => {
   const userId = ctx.from.id
   await editOrReply(
     ctx,
-    t(userId, 'cancelled'),
-    Markup.inlineKeyboard([
-      [Markup.button.callback(t(userId, 'my_sites'), 'my_sites')]
-    ])
+    t('cancelled'),
+    Markup.inlineKeyboard([[Markup.button.callback(t('my_sites'), 'my_sites')]])
   )
   log('INFO', userId, 'delete_cancel', `id=${ctx.match[1]}`)
+  pendingAction.delete(userId)
 })
 
-// Help
-bot.help(ctx => {
+// Enhanced Help command
+bot.help(async ctx => {
   const userId = ctx.from.id
-  if (!userLang.has(userId)) {
-    return ctx.reply(t(userId, 'choose_lang'), {
-      parse_mode: 'HTML',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('🌐 Tilni tanlash', 'change_lang')]
-      ])
-    })
-  }
-  ctx.reply(t(userId, 'help'), {
-    parse_mode: 'HTML',
-    ...Markup.inlineKeyboard([
+  await editOrReply(
+    ctx,
+    t('help'),
+    Markup.inlineKeyboard([
       [
-        Markup.button.callback(t(userId, 'my_sites'), 'my_sites'),
-        Markup.button.callback(t(userId, 'back'), 'back_start')
-      ]
+        Markup.button.callback(t('my_sites'), 'my_sites'),
+        Markup.button.callback(t('new_upload'), 'upload')
+      ],
+      [Markup.button.callback(t('back'), 'back_start')]
     ])
-  })
+  )
   log('INFO', userId, 'help')
+})
+
+bot.action('help_btn', async ctx => {
+  await ctx.answerCbQuery()
+  const userId = ctx.from.id
+  await editOrReply(
+    ctx,
+    t('help'),
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback(t('my_sites'), 'my_sites'),
+        Markup.button.callback(t('new_upload'), 'upload')
+      ],
+      [Markup.button.callback(t('back'), 'back_start')]
+    ])
+  )
+  log('INFO', userId, 'help_from_button')
 })
 
 // Keep Alive function for Render.com
@@ -666,7 +638,7 @@ const keepAlive = () => {
 
 // Launch bot & server
 bot.launch().then(() => {
-  console.log('✅ Bot ishlayapti!')
+  console.log('✅ Bot is running!')
   log('INFO', 'server', 'bot_launch', `BASE_URL=${BASE_URL}`)
 })
 
@@ -674,22 +646,81 @@ process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
 
 app.use('/sites', express.static(SITES_DIR))
-app.get('/', (_, res) => res.send('<h1>HTML Host Bot ishlayapti</h1>'))
-const keepServerAlive = () => {
-  if (!process.env.RENDER_URL) {
-    console.warn('⚠️ RENDER_URL is not set. Skipping ping.')
-    return
-  }
+app.get('/', (_, res) =>
+  res.send(`
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <title>HTML Host Bot</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; }
+      .header { text-align: center; margin-bottom: 30px; }
+      .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 30px 0; }
+      .feature { background: #f5f5f5; padding: 20px; border-radius: 8px; }
+      .bot-link { display: inline-block; background: #0088cc; color: white; padding: 10px 20px; border-radius: 5px; text-decoration: none; margin: 10px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>🏠 HTML Host Bot</h1>
+      <p>Instant HTML file hosting via Telegram bot</p>
+      <a href="https://t.me/${bot.botInfo.username}" class="bot-link">Start Using the Bot</a>
+    </div>
+    
+    <div class="features">
+      <div class="feature">
+        <h3>📤 Easy Upload</h3>
+        <p>Send HTML files directly to the bot for instant hosting</p>
+      </div>
+      <div class="feature">
+        <h3>📱 QR Codes</h3>
+        <p>Generate QR codes for easy mobile sharing</p>
+      </div>
+      <div class="feature">
+        <h3>🔄 Update Any Time</h3>
+        <p>Update your hosted HTML files anytime</p>
+      </div>
+      <div class="feature">
+        <h3>🔒 Secure</h3>
+        <p>Only you can manage your uploaded files</p>
+      </div>
+    </div>
+    
+    <h2>How to Use</h2>
+    <ol>
+      <li>Start the bot and click "Upload new"</li>
+      <li>Send your HTML file (max 20MB)</li>
+      <li>Get instant hosting URL and QR code</li>
+      <li>Manage your sites with /my command</li>
+    </ol>
+    
+    <h2>Features</h2>
+    <ul>
+      <li>Instant file hosting</li>
+      <li>QR code generation</li>
+      <li>Update existing sites</li>
+      <li>Delete with confirmation</li>
+      <li>File size and type validation</li>
+      <li>Activity logging</li>
+    </ul>
+  </body>
+  </html>
+`)
+)
 
-  setInterval(() => {
-    axios
-      .get(process.env.RENDER_URL)
-      .then(() => console.log('🔄 Server active'))
-      .catch(err => console.log('⚠️ Ping failed:', err.message))
-  }, 10 * 60 * 1000)
+const keepServerAlive = () => {
+  if (BASE_URL.includes('render.com')) {
+    setInterval(() => {
+      fetch(BASE_URL)
+        .then(() => console.log('🔄 Server active'))
+        .catch(err => console.log('⚠️ Ping failed:', err.message))
+    }, 10 * 60 * 1000)
+  }
 }
 
 keepServerAlive()
+
 app.listen(PORT, () => {
   console.log(`🚀 Server: ${BASE_URL}`)
   console.log(`📁 Sites directory: ${SITES_DIR}`)
